@@ -5,7 +5,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, Mapping, MutableMapping, Sequence
+from typing import Any, Callable, Dict, Mapping, MutableMapping, Sequence
 
 JsonMapping = MutableMapping[str, Any]
 InputPayload = Mapping[str, Any]
@@ -13,6 +13,36 @@ OutputPayload = Dict[str, Any]
 
 INPUT_FIELDS = {"input_files", "extra_args"}
 OUTPUT_FIELDS = {"output_files", "is_success", "error_message"}
+
+SystemFunc = Callable[[JsonMapping, "Context"], OutputPayload]
+
+
+class Context:
+    """Holds CLI runtime state such as current path, history, and system functions."""
+
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        system_funcs: Mapping[str, SystemFunc] | None = None,
+    ) -> None:
+        self.path = Path(path).resolve() if path else Path.cwd()
+        self.history: list[str] = []
+        self.system_funcs: dict[str, SystemFunc] = dict(system_funcs or {})
+
+    def record_history(self, functor: "Functor", input_payload: JsonMapping) -> None:
+        entry = self._serialize_history(functor, input_payload)
+        self.history.append(entry)
+
+    def _serialize_history(self, functor: "Functor", input_payload: JsonMapping) -> str:
+        joined_input = " ".join(input_payload.get("input_files", []))
+        joined_args = " ".join(input_payload.get("extra_args", []))
+        parts = [functor.name]
+        if joined_input:
+            parts.append(joined_input)
+        if joined_args:
+            parts.append(joined_args)
+        return " ".join(parts)
 
 
 class FunctorExecutionError(RuntimeError):
@@ -30,17 +60,19 @@ class Functor(ABC):
         default_extra_args: Sequence[str] | None = None,
     ) -> None:
         self.name = name
-        self._default_input_files = list(default_input_files) if default_input_files else None
-        self._default_extra_args = list(default_extra_args) if default_extra_args else None
+        self._default_input_files = list(default_input_files) if default_input_files is not None else None
+        self._default_extra_args = list(default_extra_args) if default_extra_args is not None else None
 
-    def __call__(self, payload: InputPayload | None = None) -> OutputPayload:
+    def __call__(self, context: Context, payload: InputPayload | None = None) -> OutputPayload:
         """Normalize the input payload, execute the functor, and validate the output."""
-        normalized = self._normalize_input(payload)
-        output = self.execute(normalized)
+        normalized = self._normalize_input(context, payload)
+        output = self.execute(context, normalized)
         self._validate_output(output)
+        if self._should_record_history():
+            context.record_history(functor=self, input_payload=normalized)
         return output
 
-    def _normalize_input(self, payload: InputPayload | None) -> JsonMapping:
+    def _normalize_input(self, context: Context, payload: InputPayload | None) -> JsonMapping:
         if payload:
             unknown = set(payload.keys()) - INPUT_FIELDS
             if unknown:
@@ -53,8 +85,11 @@ class Functor(ABC):
             "extra_args": list(payload.get("extra_args", [])) if payload else [],
         }
 
-        if not normalized["input_files"] and self._default_input_files is not None:
-            normalized["input_files"] = list(self._default_input_files)
+        if not normalized["input_files"]:
+            if self._default_input_files is not None:
+                normalized["input_files"] = list(self._default_input_files)
+            else:
+                normalized["input_files"] = [str(context.path)]
 
         if not normalized["extra_args"] and self._default_extra_args is not None:
             normalized["extra_args"] = list(self._default_extra_args)
@@ -77,8 +112,11 @@ class Functor(ABC):
                 f"Functor '{self.name}' output included unsupported fields: {', '.join(sorted(unknown))}"
             )
 
+    def _should_record_history(self) -> bool:
+        return True
+
     @abstractmethod
-    def execute(self, payload: JsonMapping) -> OutputPayload:
+    def execute(self, context: Context, payload: JsonMapping) -> OutputPayload:
         """Perform the command's work using normalized JSON input."""
 
 
@@ -97,7 +135,7 @@ class BuiltinFunctor(Functor):
         self.command = list(command)
         self.cwd = str(cwd) if cwd else None
 
-    def execute(self, payload: JsonMapping) -> OutputPayload:
+    def execute(self, context: Context, payload: JsonMapping) -> OutputPayload:
         input_files = payload.get("input_files", [])
         extra_args = payload.get("extra_args", [])
 
@@ -114,7 +152,7 @@ class BuiltinFunctor(Functor):
                 capture_output=True,
                 text=True,
                 check=False,
-                cwd=self.cwd,
+                cwd=self.cwd or str(context.path),
             )
         except FileNotFoundError as exc:
             return {
@@ -147,12 +185,12 @@ class UserDefinedFunctor(Functor):
         python_executable: str | None = None,
         cwd: str | Path | None = None,
     ) -> None:
-        super().__init__(name, default_input_files=[str(Path.cwd())])
+        super().__init__(name)
         self.script_path = str(script_path)
         self.python_executable = python_executable or sys.executable
         self.cwd = str(cwd) if cwd else None
 
-    def execute(self, payload: JsonMapping) -> OutputPayload:
+    def execute(self, context: Context, payload: JsonMapping) -> OutputPayload:
         serialized = json.dumps(payload)
         try:
             completed = subprocess.run(
@@ -161,7 +199,7 @@ class UserDefinedFunctor(Functor):
                 text=True,
                 capture_output=True,
                 check=False,
-                cwd=self.cwd,
+                cwd=self.cwd or str(context.path),
             )
         except FileNotFoundError as exc:
             return {
@@ -188,9 +226,28 @@ class UserDefinedFunctor(Functor):
 
         return output_payload
 
-def _normalize_initial_payload(payload: InputPayload | None) -> JsonMapping:
+
+class SystemFunctor(Functor):
+    """Functor that delegates to context-registered system functions."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+
+    def _should_record_history(self) -> bool:
+        return False
+
+    def execute(self, context: Context, payload: JsonMapping) -> OutputPayload:
+        handler = context.system_funcs.get(self.name)
+        if handler is None:
+            raise FunctorExecutionError(
+                f"System functor '{self.name}' is not registered in the context."
+            )
+        return handler(payload, context)
+
+
+def _normalize_initial_payload(context: Context, payload: InputPayload | None) -> JsonMapping:
     normalized: JsonMapping = {
-        "input_files": [],
+        "input_files": [str(context.path)],
         "extra_args": [],
     }
     if not payload:
@@ -211,14 +268,18 @@ def _normalize_initial_payload(payload: InputPayload | None) -> JsonMapping:
     return normalized
 
 
-def pipe_process(functors: Sequence[Functor], input_json: InputPayload | None = None) -> OutputPayload:
+def pipe_process(
+    functors: Sequence[Functor],
+    context: Context,
+    input_json: InputPayload | None = None,
+) -> OutputPayload:
     """
     Sequentially execute functors, piping output_files to the next command's input_files.
     """
     if not functors:
         raise ValueError("pipe_process requires at least one functor.")
 
-    current_payload = _normalize_initial_payload(input_json)
+    current_payload = _normalize_initial_payload(context, input_json)
     last_output: OutputPayload = {
         "output_files": list(current_payload["input_files"]),
         "is_success": True,
@@ -226,7 +287,7 @@ def pipe_process(functors: Sequence[Functor], input_json: InputPayload | None = 
     }
 
     for functor in functors:
-        result = functor(current_payload)
+        result = functor(context, current_payload)
 
         if not result.get("is_success"):
             error_message = result.get("error_message") or "Unknown error."

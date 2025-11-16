@@ -1,5 +1,21 @@
 """Core primitives for the Astro CLI prototype."""
 
-from .functors import BuiltinFunctor, Functor, FunctorExecutionError, UserDefinedFunctor, pipe_process
+from .functors import (
+    BuiltinFunctor,
+    Context,
+    Functor,
+    FunctorExecutionError,
+    SystemFunctor,
+    UserDefinedFunctor,
+    pipe_process,
+)
 
-__all__ = ["Functor", "BuiltinFunctor", "UserDefinedFunctor", "FunctorExecutionError", "pipe_process"]
+__all__ = [
+    "Context",
+    "Functor",
+    "BuiltinFunctor",
+    "UserDefinedFunctor",
+    "SystemFunctor",
+    "FunctorExecutionError",
+    "pipe_process",
+]
