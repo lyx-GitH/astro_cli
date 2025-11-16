@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, MutableMapping, TYPE_CHECKING
 
+from .system_commands import get_default_system_funcs
+
 JsonMapping = MutableMapping[str, Any]
 InputPayload = Mapping[str, Any]
 OutputPayload = Dict[str, Any]
@@ -32,7 +34,10 @@ class Context:
         base_path = Path(path).resolve() if path else Path.cwd()
         self.path = base_path
         self.history: list[str] = []
-        self.system_funcs: dict[str, SystemFunc] = dict(system_funcs or {})
+        default_funcs = get_default_system_funcs()
+        self.system_funcs: dict[str, SystemFunc] = dict(default_funcs)
+        if system_funcs:
+            self.system_funcs.update(system_funcs)
         self.scripts_path = Path(scripts_path).resolve() if scripts_path else base_path / "scripts"
         if engine is None:
             from .engine import Engine as EngineClass

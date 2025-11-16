@@ -16,7 +16,7 @@ Astro CLI is a Python-based terminal tool for image-processing workflows. It com
 Currently supported:
 1. Built-in shell commands (e.g., `ls`, `pwd`).  
 2. User scripts placed under `scripts_path`.  
-3. System commands (`:set`, etc.) are reserved but **not implemented yet**.
+3. System commands prefixed with `:` (currently `:history`, `:run`, `:list`).
 
 ### Grammar
 - Command form: `name arg1 arg2 ...`.  
@@ -64,7 +64,7 @@ Astro CLI 是一个基于 Python 的终端工具，用于处理图像工作流�
 目前支持：
 1. 系统内置命令（如 `ls`、`pwd`）。  
 2. `scripts_path` 下的用户脚本。  
-3. 以 `:` 开头的系统命令暂未实现。
+3. 以 `:` 开头的系统命令，当前提供 `:history`、`:run`、`:list`。
 
 ### 语法
 - 命令形式：`命令名 参数1 参数2 ...`  
