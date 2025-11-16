@@ -6,11 +6,14 @@ When authoring new scripts for this CLI, follow these rules:
 2. Entry point: scripts must be executable (`#!/usr/bin/env python3`) and run their logic inside a `main()` or equivalent guard.
 3. Input contract:
    - Read a single JSON document from stdin.
-   - Expect exactly two keys: `input_files` (list of paths) and `extra_args` (list of arguments, often flags like `-mode fast`).
+   - Expect these keys:
+     * `input_files`: list of paths (may be empty).
+     * `extra_args`: list of arguments/flags.
+     * `output_buffer`: path to a file where you must write your JSON result.
 4. Output contract:
-   - Emit exactly one JSON object to stdout.
+   - Write exactly one JSON object **into the file pointed to by `output_buffer`**.
    - Required keys: `output_files` (list of resulting paths), `is_success` (bool), `error_message` (null or string).
-   - Never print additional text to stdout; use stderr for debugging.
+   - Stdout/stderr are free for logging; only the buffer file will be parsed by the engine.
 5. Failure handling: set `is_success` to false and populate `error_message` when anything goes wrong; still provide the best `output_files` you can (even an empty list).
 6. File discipline: scripts should write outputs under the working directory or an explicit path passed through `extra_args`. Respect upstream `input_files` unless the script intentionally ignores them.
 7. Composeability: remember that outputs may feed downstream functors or parallel branches, so keep filenames unique and deterministic when possible.

@@ -1,19 +1,19 @@
-"""Top-level package entry for the Astro CLI."""
+"""Core primitives for the Astro CLI prototype."""
 
-from .engine import (
-    Context,
-    Engine,
-    Functor,
+from .context import Context
+from .engine import Engine
+from .functors import (
     BuiltinFunctor,
-    UserDefinedFunctor,
-    SequentialFunctor,
-    ParallelFunctor,
-    SystemFunctor,
+    Functor,
     FunctorExecutionError,
-    parse,
-    pipe_process,
-    visualize,
+    ParallelFunctor,
+    SequentialFunctor,
+    SystemFunctor,
+    UserDefinedFunctor,
 )
+from .parser import parse
+from .pipeline import pipe_process
+from .visualize import visualize
 
 __all__ = [
     "Context",
