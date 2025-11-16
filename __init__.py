@@ -12,6 +12,7 @@ from .functors import (
 )
 from .parser import parse
 from .pipeline import pipe_process
+from .visualize import visualize
 
 __all__ = [
     "Context",
@@ -24,4 +25,5 @@ __all__ = [
     "FunctorExecutionError",
     "parse",
     "pipe_process",
+    "visualize",
 ]
