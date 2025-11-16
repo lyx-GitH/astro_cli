@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Sequence
+from typing import List, Sequence, TYPE_CHECKING
 
-from .context import Context
+if TYPE_CHECKING:
+    from .context import Context
 from .functors import (
     BuiltinFunctor,
     Functor,
@@ -18,7 +19,7 @@ class ParseError(ValueError):
     """Raised when parsing a CLI command string fails."""
 
 
-def parse(command: str, context: Context) -> Functor:
+def parse(command: str, context: "Context") -> Functor:
     tokens = _tokenize(command)
     if not tokens:
         raise ParseError("Empty command.")
@@ -82,7 +83,7 @@ def _tokenize(command: str) -> List[str]:
 @dataclass
 class _Parser:
     tokens: Sequence[str]
-    context: Context
+    context: "Context"
     pos: int = 0
 
     def parse_expression(self) -> Functor:

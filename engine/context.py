@@ -11,6 +11,7 @@ INPUT_FIELDS = {"input_files", "extra_args"}
 OUTPUT_FIELDS = {"output_files", "is_success", "error_message"}
 
 if TYPE_CHECKING:
+    from .engine import Engine
     from .functors import Functor
 
 
@@ -26,12 +27,18 @@ class Context:
         *,
         system_funcs: Mapping[str, SystemFunc] | None = None,
         scripts_path: str | Path | None = None,
+        engine: "Engine" | None = None,
     ) -> None:
         base_path = Path(path).resolve() if path else Path.cwd()
         self.path = base_path
         self.history: list[str] = []
         self.system_funcs: dict[str, SystemFunc] = dict(system_funcs or {})
         self.scripts_path = Path(scripts_path).resolve() if scripts_path else base_path / "scripts"
+        if engine is None:
+            from .engine import Engine as EngineClass
+
+            engine = EngineClass()
+        self.engine = engine
 
     def record_history(self, functor: "Functor", input_payload: JsonMapping) -> None:
         entry = self._serialize_history(functor, input_payload)

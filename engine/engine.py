@@ -1,24 +1,34 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Mapping, TYPE_CHECKING
 
-from .context import Context
 from .parser import parse
 from .pipeline import pipe_process
+
+if TYPE_CHECKING:
+    from .context import Context
+    from .functors import Functor
 
 
 class Engine:
     """CLI engine that parses commands and executes functor pipelines."""
 
-    def __init__(self, context: Context | None = None) -> None:
-        self.context = context or Context()
+    def run(
+        self,
+        context: "Context",
+        command: str,
+        payload: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]:
+        functor = self.parse(context, command)
+        return self.execute(context, functor, payload)
 
-    def run(self, command: str, payload: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
-        functor = self.parse(command)
-        return self.execute(functor, payload)
+    def parse(self, context: "Context", command: str) -> "Functor":
+        return parse(command, context)
 
-    def parse(self, command: str):
-        return parse(command, self.context)
-
-    def execute(self, functor, payload: Mapping[str, Any] | None = None):
-        return functor(self.context, payload)
+    def execute(
+        self,
+        context: "Context",
+        functor: "Functor",
+        payload: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]:
+        return functor(context, payload)
