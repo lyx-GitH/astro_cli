@@ -1,49 +1,42 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from concurrent.futures import ProcessPoolExecutor
+import pickle
 import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, MutableMapping, Sequence
+from typing import Any, Dict, Mapping, Sequence
 
-JsonMapping = MutableMapping[str, Any]
-InputPayload = Mapping[str, Any]
-OutputPayload = Dict[str, Any]
-
-INPUT_FIELDS = {"input_files", "extra_args"}
-OUTPUT_FIELDS = {"output_files", "is_success", "error_message"}
-
-SystemFunc = Callable[[JsonMapping, "Context"], OutputPayload]
+from .context import Context, INPUT_FIELDS, OUTPUT_FIELDS, InputPayload, JsonMapping, OutputPayload
 
 
-class Context:
-    """Holds CLI runtime state such as current path, history, and system functions."""
+def _execute_functor_parallel(
+    functor: "Functor",
+    context_kwargs: Dict[str, Any],
+    payload: JsonMapping,
+) -> OutputPayload:
+    worker_context = Context(**context_kwargs)
+    return functor(worker_context, payload)
 
-    def __init__(
-        self,
-        path: str | Path | None = None,
-        *,
-        system_funcs: Mapping[str, SystemFunc] | None = None,
-    ) -> None:
-        self.path = Path(path).resolve() if path else Path.cwd()
-        self.history: list[str] = []
-        self.system_funcs: dict[str, SystemFunc] = dict(system_funcs or {})
 
-    def record_history(self, functor: "Functor", input_payload: JsonMapping) -> None:
-        entry = self._serialize_history(functor, input_payload)
-        self.history.append(entry)
-
-    def _serialize_history(self, functor: "Functor", input_payload: JsonMapping) -> str:
-        joined_input = " ".join(input_payload.get("input_files", []))
-        joined_args = " ".join(input_payload.get("extra_args", []))
-        parts = [functor.name]
-        if joined_input:
-            parts.append(joined_input)
-        if joined_args:
-            parts.append(joined_args)
-        return " ".join(parts)
-
+def _serialize_context_for_parallel(context: Context) -> Dict[str, Any]:
+    data: Dict[str, Any] = {
+        "path": str(context.path),
+        "scripts_path": str(context.scripts_path),
+    }
+    if context.system_funcs:
+        picklable_funcs: Dict[str, Any] = {}
+        for name, handler in context.system_funcs.items():
+            try:
+                pickle.dumps(handler)
+            except Exception:
+                continue
+            picklable_funcs[name] = handler
+        if picklable_funcs:
+            data["system_funcs"] = picklable_funcs
+    return data
 
 class FunctorExecutionError(RuntimeError):
     """Raised when a functor produces malformed data."""
@@ -184,8 +177,14 @@ class UserDefinedFunctor(Functor):
         *,
         python_executable: str | None = None,
         cwd: str | Path | None = None,
+        default_input_files: Sequence[str] | None = None,
+        default_extra_args: Sequence[str] | None = None,
     ) -> None:
-        super().__init__(name)
+        super().__init__(
+            name,
+            default_input_files=default_input_files,
+            default_extra_args=default_extra_args,
+        )
         self.script_path = str(script_path)
         self.python_executable = python_executable or sys.executable
         self.cwd = str(cwd) if cwd else None
@@ -230,8 +229,8 @@ class UserDefinedFunctor(Functor):
 class SystemFunctor(Functor):
     """Functor that delegates to context-registered system functions."""
 
-    def __init__(self, name: str) -> None:
-        super().__init__(name)
+    def __init__(self, name: str, *, default_extra_args: Sequence[str] | None = None) -> None:
+        super().__init__(name, default_input_files=[], default_extra_args=default_extra_args)
 
     def _should_record_history(self) -> bool:
         return False
@@ -245,67 +244,107 @@ class SystemFunctor(Functor):
         return handler(payload, context)
 
 
-def _normalize_initial_payload(context: Context, payload: InputPayload | None) -> JsonMapping:
-    normalized: JsonMapping = {
-        "input_files": [str(context.path)],
-        "extra_args": [],
-    }
-    if not payload:
-        return normalized
+class SequentialFunctor(Functor):
+    """Functor that composes a sequence of sub-functors sequentially."""
 
-    unknown = set(payload.keys()) - INPUT_FIELDS
-    if unknown:
-        raise FunctorExecutionError(
-            f"Pipeline received unsupported fields: {', '.join(sorted(unknown))}"
-        )
+    def __init__(self, name: str, functors: Sequence[Functor]) -> None:
+        if not functors:
+            raise ValueError("SequentialFunctor requires at least one sub-functor.")
+        super().__init__(name)
+        self.functors = list(functors)
 
-    if "input_files" in payload:
-        normalized["input_files"] = list(payload["input_files"])
-
-    if "extra_args" in payload:
-        normalized["extra_args"] = list(payload["extra_args"])
-
-    return normalized
-
-
-def pipe_process(
-    functors: Sequence[Functor],
-    context: Context,
-    input_json: InputPayload | None = None,
-) -> OutputPayload:
-    """
-    Sequentially execute functors, piping output_files to the next command's input_files.
-    """
-    if not functors:
-        raise ValueError("pipe_process requires at least one functor.")
-
-    current_payload = _normalize_initial_payload(context, input_json)
-    last_output: OutputPayload = {
-        "output_files": list(current_payload["input_files"]),
-        "is_success": True,
-        "error_message": None,
-    }
-
-    for functor in functors:
-        result = functor(context, current_payload)
-
-        if not result.get("is_success"):
-            error_message = result.get("error_message") or "Unknown error."
-            print(f"[pipe] {functor.name} failed: {error_message}", file=sys.stderr)
-            failure_output = dict(result)
-            failure_output.setdefault("failed_at", functor.name)
-            return failure_output
-
-        output_files = result.get("output_files") or []
-        if not output_files:
-            raise FunctorExecutionError(
-                f"Functor '{functor.name}' produced an empty 'output_files' value."
-            )
-
-        current_payload = {
-            "input_files": list(output_files),
-            "extra_args": [],
+    def execute(self, context: Context, payload: JsonMapping) -> OutputPayload:
+        current_payload: JsonMapping = {
+            "input_files": list(payload.get("input_files", [])),
+            "extra_args": list(payload.get("extra_args", [])),
         }
-        last_output = result
+        last_result: OutputPayload | None = None
 
-    return last_output
+        for functor in self.functors:
+            result = functor(context, current_payload)
+            if not result.get("is_success"):
+                return result
+
+            output_files = result.get("output_files") or []
+            if not output_files:
+                raise FunctorExecutionError(
+                    f"Functor '{functor.name}' produced an empty 'output_files' value."
+                )
+
+            current_payload = {
+                "input_files": list(output_files),
+                "extra_args": [],
+            }
+            last_result = result
+
+        return last_result or {
+            "output_files": list(payload.get("input_files", [])),
+            "is_success": True,
+            "error_message": None,
+        }
+
+
+class ParallelFunctor(Functor):
+    """Functor that executes multiple sub-functors in parallel and aggregates their outputs."""
+
+    def __init__(self, name: str, functors: Sequence[Functor]) -> None:
+        if not functors:
+            raise ValueError("ParallelFunctor requires at least one sub-functor.")
+        super().__init__(name)
+        self.functors = list(functors)
+
+    def execute(self, context: Context, payload: JsonMapping) -> OutputPayload:
+        base_input_files = list(payload.get("input_files", []))
+        base_extra_args = list(payload.get("extra_args", []))
+
+        context_kwargs = _serialize_context_for_parallel(context)
+
+        tasks = []
+        with ProcessPoolExecutor(max_workers=len(self.functors)) as executor:
+            for functor in self.functors:
+                functor_payload: JsonMapping = {
+                    "input_files": list(base_input_files),
+                    "extra_args": list(base_extra_args),
+                }
+                future = executor.submit(
+                    _execute_functor_parallel,
+                    functor,
+                    context_kwargs,
+                    functor_payload,
+                )
+                tasks.append((functor, future))
+
+        combined_outputs: list[str] = []
+        errors: list[str] = []
+
+        for functor, future in tasks:
+            try:
+                result = future.result()
+            except Exception as exc:
+                errors.append(f"{functor.name}: {exc}")
+                continue
+
+            if not result.get("is_success"):
+                message = result.get("error_message") or "Unknown error."
+                errors.append(f"{functor.name}: {message}")
+                continue
+
+            output_files = result.get("output_files") or []
+            if not output_files:
+                raise FunctorExecutionError(
+                    f"Functor '{functor.name}' produced an empty 'output_files' value."
+                )
+            combined_outputs.extend(output_files)
+
+        if errors:
+            return {
+                "output_files": list(base_input_files),
+                "is_success": False,
+                "error_message": "; ".join(errors),
+            }
+
+        return {
+            "output_files": combined_outputs,
+            "is_success": True,
+            "error_message": None,
+        }
