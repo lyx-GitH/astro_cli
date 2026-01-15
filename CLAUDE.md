@@ -10,11 +10,12 @@ Astro CLI is a Python-based terminal tool for image-processing workflows that co
 
 Start the interactive shell:
 ```bash
-python3 -m astro_cli.main --scripts_path <path-to-scripts> [--debug]
+python3 -m astro_cli.main --scripts_path <path-to-scripts> [--debug] [--verbose]
 ```
 
 - `--scripts_path`: Directory for user scripts (defaults to `./scripts/`)
 - `--debug`: Print the functor tree before execution
+- `--verbose`: Print full JSON output instead of simplified result (by default, only `output_files` on success or `error_message` on failure is shown)
 
 ## Architecture
 
