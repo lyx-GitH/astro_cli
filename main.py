@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import readline  # noqa: F401 - enables arrow key history navigation
 import sys
 from pathlib import Path
 
