@@ -12,6 +12,7 @@ def get_default_system_funcs():
         "history": history_command,
         "run": run_command,
         "list": list_command,
+        "exec": exec_command,
     }
 
 
@@ -80,5 +81,52 @@ def list_command(payload: JsonMapping, context) -> Dict:
         "output_files": listed,
         "is_success": not missing,
         "error_message": None if not missing else f"Missing: {', '.join(missing)}",
+    }
+
+
+def exec_command(payload: JsonMapping, context) -> Dict:
+    """Execute each input_files entry as an astro-cli command.
+
+    Designed for pipeline use: `cat commands.txt | :exec`
+    Each item in input_files is treated as a command string and
+    executed through the CLI parsing engine.
+
+    Args:
+        payload: Contains input_files (command strings from pipeline).
+        context: The CLI context.
+
+    Returns:
+        Combined output from all executed commands.
+    """
+    # input_files are the command strings (from previous functor's output)
+    commands = payload.get("input_files", [])
+
+    if not commands:
+        return {
+            "output_files": [],
+            "is_success": False,
+            "error_message": "exec requires commands in input_files.",
+        }
+
+    # Execute each command through the engine
+    all_outputs: List[str] = []
+    for cmd in commands:
+        cmd = cmd.strip()
+        # Skip empty lines and comments
+        if not cmd or cmd.startswith("#"):
+            continue
+        result = context.engine.run(context, cmd)
+        if not result.get("is_success"):
+            return {
+                "output_files": all_outputs,
+                "is_success": False,
+                "error_message": f"Command '{cmd}' failed: {result.get('error_message')}",
+            }
+        all_outputs.extend(result.get("output_files", []))
+
+    return {
+        "output_files": all_outputs,
+        "is_success": True,
+        "error_message": None,
     }
 
