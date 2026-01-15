@@ -18,6 +18,16 @@ except ImportError:  # pragma: no cover - fallback when running as script
     from astro_cli import Context, visualize  # type: ignore
 
 
+# ANSI color codes
+_RED = "\033[31m"
+_RESET = "\033[0m"
+
+
+def _print_error(message: str) -> None:
+    """Print error message in red."""
+    print(f"{_RED}{message}{_RESET}")
+
+
 def main() -> None:
     args = _parse_args()
     scripts_path = Path(args.scripts_path).resolve() if args.scripts_path else None
@@ -52,7 +62,7 @@ def main() -> None:
         try:
             functor = engine.parse(context, command)
         except Exception as exc:  # noqa: BLE001
-            print(f"[parse error] {exc}")
+            _print_error(f"[parse error] {exc}")
             continue
 
         if args.debug:
@@ -62,7 +72,7 @@ def main() -> None:
         try:
             result = engine.execute(context, functor)
         except Exception as exc:  # noqa: BLE001
-            print(f"[execution error] {exc}")
+            _print_error(f"[execution error] {exc}")
             continue
 
         _print_result(result, verbose)
@@ -166,7 +176,7 @@ def _print_result(result: dict, verbose: bool) -> None:
                     print(f)
         else:
             error_message = result.get("error_message", "Unknown error")
-            print(f"[error] {error_message}")
+            _print_error(f"[error] {error_message}")
 
 
 def _parse_args() -> argparse.Namespace:
