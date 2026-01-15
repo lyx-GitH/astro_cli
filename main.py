@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import readline  # noqa: F401 - enables arrow key history navigation
+import readline
 import sys
 from pathlib import Path
 
@@ -22,6 +22,11 @@ def main() -> None:
     context = Context(path=Path.cwd(), scripts_path=scripts_path)
     engine = context.engine
     verbose = args.verbose
+
+    # Set up tab completion
+    completer = Completer(context)
+    readline.set_completer(completer.complete)
+    readline.parse_and_bind("tab: complete")
 
     print(
         f"Starting Astro CLI with path={context.path} "
@@ -58,6 +63,38 @@ def main() -> None:
             continue
 
         _print_result(result, verbose)
+
+
+class Completer:
+    """Tab completion for commands."""
+
+    def __init__(self, context: Context) -> None:
+        self.context = context
+        self._matches: list[str] = []
+
+    def _get_commands(self) -> list[str]:
+        """Get all available commands."""
+        commands: list[str] = []
+        # System commands (prefixed with :)
+        commands.extend(f":{name}" for name in self.context.system_funcs.keys())
+        # User scripts
+        if self.context.scripts_path.exists():
+            for script in self.context.scripts_path.glob("*.py"):
+                commands.append(script.stem)
+        return commands
+
+    def complete(self, text: str, state: int) -> str | None:
+        """Return the next possible completion for text."""
+        if state == 0:
+            commands = self._get_commands()
+            if text:
+                self._matches = [c for c in commands if c.startswith(text)]
+            else:
+                self._matches = commands
+        try:
+            return self._matches[state]
+        except IndexError:
+            return None
 
 
 def _print_result(result: dict, verbose: bool) -> None:
